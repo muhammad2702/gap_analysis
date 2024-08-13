@@ -1,196 +1,166 @@
-import streamlit as st
 import requests
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from datetime import datetime, timedelta
-import numpy as np
-from matplotlib.dates import DateFormatter
+import streamlit as st
+import seaborn as sns
+import matplotlib.pyplot as plt
+import io
 
-API_KEY = 'whXh4oYmhSxw1SYOlu5HZnw6NPTJFOF5'
+API_KEY = 'wERjETOkx4U_xE6fyCA6z9wODWUarDxa'  # Replace with your actual Polygon.io API key
 
-
-def fetch_data(ticker, start_date, end_date, multiplier=1, timespan='day'):
-    url = f'https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{start_date}/{end_date}'
-    headers = {
-        'Authorization': f'Bearer {API_KEY}'
-    }
-    params = {
-        'adjusted': 'true',
-        'sort': 'asc',
-        'limit': 50000
-    }
-    response = requests.get(url, headers=headers, params=params)
-
-    if response.status_code != 200:
-        st.error(f"Error fetching data for {ticker}: {response.status_code}, {response.text}")
-        return []
+def get_stock_tickers(market, type, active, sort, order, limit):
+    url = f"https://api.polygon.io/v3/reference/tickers?market={market}&type={type}&active={active}&sort={sort}&order={order}&limit={limit}&apiKey={API_KEY}"
+    tickers = []
+    response = requests.get(url).json()
     
-    data = response.json()
-    if 'results' in data:
-        st.info(f"Fetched {len(data['results'])} data points for {ticker}")
-        return data['results']
-    st.warning(f"No results found for {ticker}")
-    return []
+    if 'results' in response:
+        tickers.extend([ticker['ticker'] for ticker in response['results']])
+        st.info(f"Found {len(tickers)} tickers.")
+    else:
+        st.warning("No results found or unexpected response structure")
+    
+    return tickers
 
-def get_historical_data(tickers, start_date, end_date):
-    all_data = []
-    for ticker in tickers:
-        data = fetch_data(ticker, start_date, end_date)
-        if data:
-            for entry in data:
-                all_data.append({
-                    'ticker': ticker,
-                    'date': datetime.fromtimestamp(entry['t'] / 1000).strftime('%Y-%m-%d'),
-                    'open': entry['o'],
-                    'high': entry['h'],
-                    'low': entry['l'],
-                    'close': entry['c'],
-                    'volume': entry['v'],
-                })
-    df = pd.DataFrame(all_data)
-    st.info(f"Total data points fetched: {len(df)}")
-    return df
+def get_stock_data(symbol, date, adjusted):
+    url = f'https://api.polygon.io/v1/open-close/{symbol}/{date}?adjusted={adjusted}&apiKey={API_KEY}'
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        #st.warning(f"Failed to fetch data for {symbol} on {date}. Status Code: {response.status_code}")
+        return None
 
-def calculate_gaps(stock_data, gap_percentage_threshold):
-    gapped_stocks = set()
-    grouped_data = stock_data.groupby('ticker')
+def get_previous_dates(num_days):
+    today = datetime.now() - timedelta(days=1)
+    dates = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(0, num_days)]
+    return dates
 
-    for ticker, group in grouped_data:
-        group = group.sort_values('date')
-        for i in range(1, len(group)):
-            prev_close = group.iloc[i-1]['close']
-            current_open = group.iloc[i]['open']
-            if prev_close > 0:
-                gap_percentage = ((current_open - prev_close) / prev_close) * 100
-                if abs(gap_percentage) >= gap_percentage_threshold:
-                    gapped_stocks.add(ticker)
-                    break  # We only need to find one gap to include the stock
+def plot_gap_distribution(df, min_gap):
+    plt.figure(figsize=(10, 6))
+    sns.histplot(df[df['gap_percentage'] >= min_gap]['gap_percentage'], kde=True)
+    plt.title(f'Distribution of Gap Up Percentages (>= {min_gap}%)')
+    plt.xlabel('Gap Up Percentage')
+    plt.ylabel('Frequency')
+    st.pyplot(plt)
 
-    return list(gapped_stocks)
-def plot_stock_data(data, ticker):
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-    fig.suptitle(f"{ticker} Stock Analysis", fontsize=16)
-
-    x = range(len(data))
-
-    # Price chart
-    ax1.plot(x, data['close'], label='Close Price')
-    ax1.plot(x, data['open'], label='Open Price', alpha=0.7)
-    ax1.fill_between(x, data['low'], data['high'], alpha=0.3, label='Price Range')
-    ax1.set_ylabel("Price")
-    ax1.legend()
-    ax1.set_title("Stock Price")
-
-    # Volume chart
-    ax2.bar(x, data['volume'], label='Volume', alpha=0.7)
-    ax2.set_xlabel("Trading Days")
-    ax2.set_ylabel("Volume")
-    ax2.set_title("Trading Volume")
-
-    plt.tight_layout()
-    st.pyplot(fig)
-
-def plot_price_distribution(data):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.histplot(data=data, x='close', kde=True, ax=ax)
-    ax.set_title("Distribution of Closing Prices")
-    ax.set_xlabel("Closing Price")
-    ax.set_ylabel("Frequency")
-    st.pyplot(fig)
-
-def plot_correlation_heatmap(data):
-    numeric_columns = ['open', 'high', 'low', 'close', 'volume']
-    corr_matrix = data[numeric_columns].corr()
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', ax=ax)
-    ax.set_title("Correlation Heatmap of Stock Data")
-    st.pyplot(fig)
-
-def plot_candlestick_chart(data):
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    # Candlestick chart
-    width = 0.6
-    width2 = 0.05
-
-    up = data[data.close >= data.open]
-    down = data[data.close < data.open]
-
-    x_up = range(len(up))
-    x_down = range(len(down))
-
-    ax.bar(x_up, up.close - up.open, width, bottom=up.open, color='g')
-    ax.bar(x_up, up.high - up.close, width2, bottom=up.close, color='g')
-    ax.bar(x_up, up.low - up.open, width2, bottom=up.open, color='g')
-
-    ax.bar(x_down, down.close - down.open, width, bottom=down.open, color='r')
-    ax.bar(x_down, down.high - down.open, width2, bottom=down.open, color='r')
-    ax.bar(x_down, down.low - down.close, width2, bottom=down.close, color='r')
-
-    ax.set_title("Candlestick Chart")
-    ax.set_xlabel("Trading Days")
-    ax.set_ylabel("Price")
-    plt.tight_layout()
-    st.pyplot(fig)
-
-def plot_gap_analysis(data, gap_percentage_threshold):
-    data['prev_close'] = data['close'].shift(1)
-    data['gap_percentage'] = (data['open'] - data['prev_close']) / data['prev_close'] * 100
-    data['significant_gap'] = abs(data['gap_percentage']) >= gap_percentage_threshold
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.scatter(range(len(data)), data['gap_percentage'], c=data['significant_gap'], cmap='coolwarm', alpha=0.7)
-    ax.axhline(y=0, color='black', linestyle='--', alpha=0.5)
-    ax.axhline(y=gap_percentage_threshold, color='red', linestyle='--', alpha=0.5)
-    ax.axhline(y=-gap_percentage_threshold, color='red', linestyle='--', alpha=0.5)
-    ax.set_title("Gap Analysis")
-    ax.set_xlabel("Trading Days")
-    ax.set_ylabel("Gap Percentage")
-    plt.tight_layout()
-    st.pyplot(fig)
+def plot_top_gappers(df, min_gap):
+    top_10 = df[df['gap_percentage'] >= min_gap].nlargest(10, 'gap_percentage')
+    plt.figure(figsize=(12, 6))
+    sns.barplot(x='symbol', y='gap_percentage', data=top_10)
+    plt.title(f'Top 10 Gappers (>= {min_gap}%)')
+    plt.xlabel('Symbol')
+    plt.ylabel('Gap Up Percentage')
+    plt.xticks(rotation=45)
+    st.pyplot(plt)
 
 def main():
-    st.title("Stock Gap Analysis")
+    st.title("Stock Gap Up Analysis")
 
     # User inputs
-    start_date = st.date_input("Start Date", value=pd.to_datetime("2022-01-01"))
-    end_date = st.date_input("End Date", value=pd.to_datetime("2023-12-31"))
-    gap_percentage_threshold = st.slider("Gap Percentage Threshold", 1.0, 20.0, 5.0, 0.1)
-    tickers = st.text_input("Enter stock tickers (comma-separated)", "AAPL,GOOGL,TSLA,MSFT,AMZN").split(',')
+    num_days = st.number_input("Enter the number of days to retrieve data (up to today)", min_value=1, max_value=30, value=5)
+    use_custom_tickers = st.checkbox("Use custom list of tickers")
+    
+    if use_custom_tickers:
+        custom_tickers = st.text_input("Enter comma-separated list of tickers").upper().split(',')
+        tickers = [ticker.strip() for ticker in custom_tickers if ticker.strip()]
+    else:
+        market = st.selectbox("Select market", ["stocks", "crypto", "fx"])
+        type = st.selectbox("Select type", ["CS", "ADRC", "ADRP", "ADRR", "ETF", "FUND", "SP"])
+        active = st.checkbox("Active stocks only", value=True)
+        sort = st.selectbox("Sort by", ["ticker", "name", "market", "locale", "primary_exchange", "type", "currency_name", "cik"])
+        order = st.selectbox("Order", ["asc", "desc"])
+        limit = st.number_input("Limit", min_value=1, max_value=1000, value=100)
+    
+    adjusted = st.checkbox("Adjusted prices", value=True)
+    gap_percentage = st.number_input("Minimum gap up percentage for separate sheet", min_value=0.0, max_value=100.0, value=5.0)
+    vis_gap_percentage = st.number_input("Minimum gap up percentage for visualizations", min_value=0.0, max_value=100.0, value=5.0)
 
-    if st.button("Analyze Stocks"):
-        historical_data = get_historical_data(tickers, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+    if st.button("Analyze"):
+        dates_to_check = get_previous_dates(num_days)
         
-        gapped_stocks = calculate_gaps(historical_data, gap_percentage_threshold)
-        st.success(f"Number of stocks with gaps >= {gap_percentage_threshold}%: {len(gapped_stocks)}")
+        if not use_custom_tickers:
+            tickers = get_stock_tickers(market, type, str(active).lower(), sort, order, limit)
+        
+        if not tickers:
+            st.error("No tickers to analyze. Please check your inputs.")
+            return
 
-        # Filter the dataset to include only the gapped stocks
-        filtered_data = historical_data[historical_data['ticker'].isin(gapped_stocks)]
+        all_results = []
+        high_gap_results = []
 
-        # Save the full dataset for gapped stocks
-        filtered_data.to_csv('gapped_stocks_full_data.csv', index=False)
-        st.success(f"Full dataset for gapped stocks saved as 'gapped_stocks_full_data.csv'. Shape: {filtered_data.shape}")
+        progress_bar = st.progress(0)
+        total_iterations = len(tickers) * len(dates_to_check)
+        current_iteration = 0
 
-        # Display gapped stocks
-        st.subheader("Stocks with Significant Gaps:")
-        st.write(", ".join(gapped_stocks))
+        for symbol in tickers:
+            for date in dates_to_check:
+                today_data = get_stock_data(symbol, date, str(adjusted).lower())
+                if today_data and 'preMarket' in today_data:
+                    previous_pre_market_price = today_data['preMarket']
+                    
+                    next_date = (datetime.strptime(date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+                    next_day_data = get_stock_data(symbol, next_date, str(adjusted).lower())
+                    if next_day_data and 'open' in next_day_data:
+                        next_day_open_price = next_day_data['open']
+                        
+                        gap_up = ((next_day_open_price - previous_pre_market_price) / previous_pre_market_price) * 100
+                        
+                        result = {
+                            'symbol': symbol,
+                            'date': date,
+                            'previous_pre_market_price': previous_pre_market_price,
+                            'next_day_open_price': next_day_open_price,
+                            'gap_percentage': gap_up,
+                            'open': next_day_data.get('open'),
+                            'high': next_day_data.get('high'),
+                            'low': next_day_data.get('low'),
+                            'close': next_day_data.get('close'),
+                            'volume': next_day_data.get('volume')
+                        }
+                        
+                        all_results.append(result)
+                        
+                        if gap_up >= gap_percentage:
+                            high_gap_results.append(result)
+                
+                current_iteration += 1
+                progress_bar.progress(current_iteration / total_iterations)
 
-        # Plot data for each gapped stock
-        for ticker in gapped_stocks:
-            st.subheader(f"{ticker} Stock Analysis")
-            stock_data = filtered_data[filtered_data['ticker'] == ticker]
-            
-            plot_stock_data(stock_data, ticker)
-            plot_price_distribution(stock_data)
-            plot_correlation_heatmap(stock_data)
-            plot_candlestick_chart(stock_data)
-            plot_gap_analysis(stock_data, gap_percentage_threshold)
+        if all_results:
+            all_df = pd.DataFrame(all_results)
+            high_gap_df = pd.DataFrame(high_gap_results)
 
-        # Display the dataframe
-        st.subheader("Gapped Stocks Data")
-        st.dataframe(filtered_data)
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                all_df.to_excel(writer, sheet_name='All Gapped Up Stocks', index=False)
+                if not high_gap_df.empty:
+                    high_gap_df.to_excel(writer, sheet_name=f'Gap Up {gap_percentage}%+', index=False)
 
-if __name__ == "__main__":
+            excel_buffer.seek(0)
+            st.success(f'Analysis complete with {len(all_results)} entries.')
+            st.download_button(
+                label="Download Excel file",
+                data=excel_buffer,
+                file_name='gapped_up_stocks.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+
+            # Visualizations
+            st.subheader("Visualizations")
+            plot_gap_distribution(all_df, vis_gap_percentage)
+            plot_top_gappers(all_df, vis_gap_percentage)
+
+            # Display Excel file contents
+            st.subheader("Excel File Contents")
+            st.write("All Gapped Up Stocks:")
+            st.dataframe(all_df)
+            if not high_gap_df.empty:
+                st.write(f"Gap Up {gap_percentage}%+:")
+                st.dataframe(high_gap_df)
+
+        else:
+            st.warning('No stocks found that gapped up.')
+
+if __name__ == '__main__':
     main()
