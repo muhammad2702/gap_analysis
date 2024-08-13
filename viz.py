@@ -58,7 +58,7 @@ def main():
     st.title("Stock Gap Up Analysis")
 
     # User inputs
-    num_days = st.number_input("Enter the number of days to retrieve data (up to today)", min_value=1, max_value=30, value=5)
+    num_days = st.number_input("Enter the number of days to retrieve data (up to today)", min_value=1, max_value=30000, value=5)
     use_custom_tickers = st.checkbox("Use custom list of tickers")
     
     if use_custom_tickers:
