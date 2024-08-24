@@ -1,6 +1,8 @@
 streamlit
+setuptools
+pandas==2.0.3
+numpy==1.23.5
 requests
-pandas
 matplotlib
 seaborn
-numpy
+
