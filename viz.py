@@ -70,7 +70,7 @@ def main():
         active = st.checkbox("Active stocks only", value=True)
         sort = st.selectbox("Sort by", ["ticker", "name", "market", "locale", "primary_exchange", "type", "currency_name", "cik"])
         order = st.selectbox("Order", ["asc", "desc"])
-        limit = st.number_input("Limit", min_value=1, max_value=1000, value=100)
+        limit = st.number_input("Limit", min_value=1, max_value=10000, value=100)
     
     adjusted = st.checkbox("Adjusted prices", value=True)
     gap_percentage = st.number_input("Minimum gap up percentage for separate sheet", min_value=0.0, max_value=100.0, value=5.0)
